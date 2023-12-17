@@ -6,7 +6,6 @@ use std::error::Error;
 use std::fs::read_to_string;
 use std::path::PathBuf;
 use yup_oauth2::authenticator::{ApplicationDefaultCredentialsTypes, Authenticator};
-use yup_oauth2::authorized_user::AuthorizedUserFlow;
 use yup_oauth2::{
     read_authorized_user_secret, ApplicationDefaultCredentialsAuthenticator,
     ApplicationDefaultCredentialsFlowOpts, AuthorizedUserAuthenticator,
@@ -23,14 +22,14 @@ pub trait AuthHelper: Sized {
     /// 1. Check for GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS_JSON env variable
     /// 2. Check for default location of the credentials file which is ~/.config/gcloud/application_default_credentials.json on linux
     /// 3. Check for creds on metadata server
-    async fn auth() -> Result<Self, Box<dyn std::error::Error + Send + Sync>>;
+    async fn auth() -> Result<Self, Box<dyn Error + Send + Sync>>;
 
     /// Authenticate with google cloud services using a credentials file (service account file)
     async fn auth_with_file(file: String)
-        -> Result<Self, Box<dyn std::error::Error + Send + Sync>>;
+        -> Result<Self, Box<dyn Error + Send + Sync>>;
 
     /// Authenticate with google cloud services using env variables of the service account credentials
-    async fn auth_with_env(env: String) -> Result<Self, Box<dyn std::error::Error + Send + Sync>>;
+    async fn auth_with_env(env: String) -> Result<Self, Box<dyn Error + Send + Sync>>;
 }
 
 #[async_trait]
@@ -91,14 +90,9 @@ impl AuthHelper for Authenticator<HttpsConnector<HttpConnector>> {
                     .join(DEFAULT_CREDENTIALS_FILE),
             )
         } else {
-            match home::home_dir() {
-                Some(s) => Some(
-                    s.join(".config")
+            home::home_dir().map(|s| s.join(".config")
                         .join("gcloud")
-                        .join(DEFAULT_CREDENTIALS_FILE),
-                ),
-                None => None,
-            }
+                        .join(DEFAULT_CREDENTIALS_FILE))
         };
 
         // check if the file exists
@@ -148,26 +142,48 @@ impl AuthHelper for Authenticator<HttpsConnector<HttpConnector>> {
 mod tests {
     use super::*;
     use google_cloud_storage::client::{Client, ClientConfig};
+    use google_cloud_storage::http::objects::delete::DeleteObjectRequest;
+    use google_cloud_storage::http::objects::download::Range;
+    use google_cloud_storage::http::objects::get::GetObjectRequest;
+    use google_cloud_storage::http::objects::upload::{Media, UploadObjectRequest, UploadType};
+
     use google_cloudtasks2::{
-        api::{CreateTaskRequest, HttpRequest, OidcToken, Task},
-        hyper::{client::HttpConnector, Client as HyperClient},
-        hyper_rustls::{HttpsConnector, HttpsConnectorBuilder},
+        api::{CreateTaskRequest, HttpRequest, Task},
+        hyper::Client as HyperClient,
+        hyper_rustls::HttpsConnectorBuilder,
         oauth2::authenticator::Authenticator,
         CloudTasks,
+    };
+
+    use google_secretmanager1::{
+        SecretManager,
     };
 
     // just creates auth for storage and cloud tasks and does nothing
     #[tokio::test]
     async fn test_auth() {
         let storage = ClientConfig::auth().await.unwrap();
-        let client = Client::new(storage);
+        let _client = Client::new(storage);
 
         let auth = Authenticator::auth().await.unwrap();
-        let hub = CloudTasks::new(
+        let _hub = CloudTasks::new(
             HyperClient::builder().build(
                 HttpsConnectorBuilder::new()
                     .with_native_roots()
                     .https_only()
+                    .enable_http1()
+                    .enable_http2()
+                    .build(),
+            ),
+            auth,
+        );
+
+        let auth = Authenticator::auth().await.unwrap();
+        let _hub = SecretManager::new(
+            HyperClient::builder().build(
+                HttpsConnectorBuilder::new()
+                    .with_native_roots()
+                    .https_or_http()
                     .enable_http1()
                     .enable_http2()
                     .build(),
@@ -179,6 +195,7 @@ mod tests {
     // creates a task in cloud tasks
     #[tokio::test]
     async fn cloud_tasks_test() {
+
         let auth = Authenticator::auth().await.unwrap();
         let hub = CloudTasks::new(
             HyperClient::builder().build(
@@ -212,9 +229,97 @@ mod tests {
             .locations_queues_tasks_create(rq, queue_path.as_str())
             .doit()
             .await
-            .unwrap();
+            .unwrap_or_else(|err| {
+                panic!("failed to create task: {:?}", err);
+            });
 
         println!("{:?}", r);
         println!("{:?}", t);
+    }
+
+    #[tokio::test]
+    async fn cloud_storage_test() {
+        let auth = ClientConfig::auth().await.unwrap();
+        let client = Client::new(auth);
+
+        let bucket = std::env::var("BUCKET").expect("BUCKET env variable not set");
+        let filename = std::env::var("FILENAME").expect("FILENAME env variable not set");
+        let hello = "hello world";
+
+        let upload_type = UploadType::Simple(Media::new(filename.clone()));
+
+        let upload_req = UploadObjectRequest {
+            bucket: bucket.clone(),
+            ..Default::default()
+        };
+
+        let uploaded = client.upload_object(
+            &upload_req,
+            hello.as_bytes(),
+            &upload_type,
+        ).await.unwrap_or_else(|err| {
+            panic!("failed to upload object: {:?}", err);
+        });
+
+        println!("{:?}", uploaded);
+
+        let download_req = GetObjectRequest {
+            bucket: bucket.clone(),
+            object: filename.clone(),
+            ..Default::default()
+        };
+
+        let downloaded = client.download_object(
+            &download_req,
+            &Range::default(),
+        ).await.unwrap_or_else(|err| {
+            panic!("failed to download object: {:?}", err);
+        });
+
+        println!("{:?}", downloaded);
+
+        let downloaded = String::from_utf8(downloaded).unwrap();
+
+        assert_eq!(hello, downloaded.as_str());
+
+        client.delete_object(&DeleteObjectRequest{
+            bucket: bucket.clone(),
+            object: filename.clone(),
+            ..Default::default()
+        }).await.unwrap_or_else(|err| {
+            panic!("failed to delete object: {:?}", err);
+        });
+    }
+
+    #[tokio::test]
+    async fn secret_manager_test() {
+
+        let auth = Authenticator::auth().await.unwrap();
+        let hub = SecretManager::new(
+            HyperClient::builder().build(
+                HttpsConnectorBuilder::new()
+                    .with_native_roots()
+                    .https_or_http()
+                    .enable_http1()
+                    .enable_http2()
+                    .build(),
+            ),
+            auth,
+        );
+
+        let secret = std::env::var("SECRET").expect("SECRET env variable not set");
+        let (res ,secret) = hub.projects().secrets_versions_access(secret.as_str()).doit().await.unwrap_or_else(|err| {
+            panic!("failed to get secret: {:?}", err);
+        });
+
+        let secret = if let Some(pl) = secret.payload {
+            if let Some(pl) = pl.data {
+                String::from_utf8(pl).unwrap()
+            } else {
+                panic!("secret payload data is empty");
+            }
+        } else {
+            panic!("secret payload is empty");
+        };
     }
 }
