@@ -1,3 +1,4 @@
+use crate::helper;
 use async_trait::async_trait;
 use google_cloud_storage::client::{google_cloud_auth::credentials::CredentialsFile, ClientConfig};
 use hyper::client::HttpConnector;
@@ -14,19 +15,22 @@ use yup_oauth2::{
 
 const DEFAULT_CREDENTIALS_FILE: &str = "application_default_credentials.json";
 
-/// A trait for authenticating with google cloud services across different libraries
+/// [`helper::AuthHelper`] trait for authenticating with google cloud services across different libraries
+/// This trait is implemented for `ClientConfig` and `Authenticator<HttpsConnector<HttpConnector>>`
+/// from [google_cloud_storage] and [yup_oauth2] (used by [google_cloudtask2](https://crates.io/crates/google_cloudtask2) & [google_secretmanager1](https://crates.io/crates/google_secretmanager1) etc) respectively
 #[async_trait]
 pub trait AuthHelper: Sized {
     /// Authenticate with google cloud services using the default method
-    /// In All libraries the authentication goes through almost same following steps:
-    /// 1. Check for GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS_JSON env variable
-    /// 2. Check for default location of the credentials file which is ~/.config/gcloud/application_default_credentials.json on linux
+    /// The authentication goes through following steps:
+    /// 1. Check for `GOOGLE_APPLICATION_CREDENTIALS` or `GOOGLE_APPLICATION_CREDENTIALS_JSON` env variable
+    /// 2. Check for default location of the credentials file which is `~/.config/gcloud/application_default_credentials.json` on linux
+    /// and `%APPDATA%/gcloud/application_default_credentials.json` on windows
+    /// run `gcloud auth application-default login` to create this file
     /// 3. Check for creds on metadata server
     async fn auth() -> Result<Self, Box<dyn Error + Send + Sync>>;
 
     /// Authenticate with google cloud services using a credentials file (service account file)
-    async fn auth_with_file(file: String)
-        -> Result<Self, Box<dyn Error + Send + Sync>>;
+    async fn auth_with_file(file: String) -> Result<Self, Box<dyn Error + Send + Sync>>;
 
     /// Authenticate with google cloud services using env variables of the service account credentials
     async fn auth_with_env(env: String) -> Result<Self, Box<dyn Error + Send + Sync>>;
@@ -90,9 +94,11 @@ impl AuthHelper for Authenticator<HttpsConnector<HttpConnector>> {
                     .join(DEFAULT_CREDENTIALS_FILE),
             )
         } else {
-            home::home_dir().map(|s| s.join(".config")
-                        .join("gcloud")
-                        .join(DEFAULT_CREDENTIALS_FILE))
+            home::home_dir().map(|s| {
+                s.join(".config")
+                    .join("gcloud")
+                    .join(DEFAULT_CREDENTIALS_FILE)
+            })
         };
 
         // check if the file exists
@@ -155,9 +161,7 @@ mod tests {
         CloudTasks,
     };
 
-    use google_secretmanager1::{
-        SecretManager,
-    };
+    use google_secretmanager1::SecretManager;
 
     // just creates auth for storage and cloud tasks and does nothing
     #[tokio::test]
@@ -195,7 +199,6 @@ mod tests {
     // creates a task in cloud tasks
     #[tokio::test]
     async fn cloud_tasks_test() {
-
         let auth = Authenticator::auth().await.unwrap();
         let hub = CloudTasks::new(
             HyperClient::builder().build(
@@ -253,13 +256,12 @@ mod tests {
             ..Default::default()
         };
 
-        let uploaded = client.upload_object(
-            &upload_req,
-            hello.as_bytes(),
-            &upload_type,
-        ).await.unwrap_or_else(|err| {
-            panic!("failed to upload object: {:?}", err);
-        });
+        let uploaded = client
+            .upload_object(&upload_req, hello.as_bytes(), &upload_type)
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to upload object: {:?}", err);
+            });
 
         println!("{:?}", uploaded);
 
@@ -269,12 +271,12 @@ mod tests {
             ..Default::default()
         };
 
-        let downloaded = client.download_object(
-            &download_req,
-            &Range::default(),
-        ).await.unwrap_or_else(|err| {
-            panic!("failed to download object: {:?}", err);
-        });
+        let downloaded = client
+            .download_object(&download_req, &Range::default())
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to download object: {:?}", err);
+            });
 
         println!("{:?}", downloaded);
 
@@ -282,18 +284,20 @@ mod tests {
 
         assert_eq!(hello, downloaded.as_str());
 
-        client.delete_object(&DeleteObjectRequest{
-            bucket: bucket.clone(),
-            object: filename.clone(),
-            ..Default::default()
-        }).await.unwrap_or_else(|err| {
-            panic!("failed to delete object: {:?}", err);
-        });
+        client
+            .delete_object(&DeleteObjectRequest {
+                bucket: bucket.clone(),
+                object: filename.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to delete object: {:?}", err);
+            });
     }
 
     #[tokio::test]
     async fn secret_manager_test() {
-
         let auth = Authenticator::auth().await.unwrap();
         let hub = SecretManager::new(
             HyperClient::builder().build(
@@ -308,9 +312,14 @@ mod tests {
         );
 
         let secret = std::env::var("SECRET").expect("SECRET env variable not set");
-        let (res ,secret) = hub.projects().secrets_versions_access(secret.as_str()).doit().await.unwrap_or_else(|err| {
-            panic!("failed to get secret: {:?}", err);
-        });
+        let (res, secret) = hub
+            .projects()
+            .secrets_versions_access(secret.as_str())
+            .doit()
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to get secret: {:?}", err);
+            });
 
         let secret = if let Some(pl) = secret.payload {
             if let Some(pl) = pl.data {
