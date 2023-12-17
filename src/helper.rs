@@ -311,7 +311,7 @@ mod tests {
         );
 
         let secret = std::env::var("SECRET").expect("SECRET env variable not set");
-        let (res, secret) = hub
+        let (_res, secret) = hub
             .projects()
             .secrets_versions_access(secret.as_str())
             .doit()
@@ -320,7 +320,7 @@ mod tests {
                 panic!("failed to get secret: {:?}", err);
             });
 
-        let secret = if let Some(pl) = secret.payload {
+        let _secret = if let Some(pl) = secret.payload {
             if let Some(pl) = pl.data {
                 String::from_utf8(pl).unwrap()
             } else {
