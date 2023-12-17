@@ -1,4 +1,9 @@
-Demo
+The authentication goes through following steps:
+1. Check for `GOOGLE_APPLICATION_CREDENTIALS` or `GOOGLE_APPLICATION_CREDENTIALS_JSON` env variable
+2. Check for default location of the credentials file which is `~/.config/gcloud/application_default_credentials.json` on linux
+    and `%APPDATA%/gcloud/application_default_credentials.json` on windows
+    run `gcloud auth application-default login` to create this file
+3. Check for creds on metadata server
 
 ```rust
 use google_auth_helper::helper::AuthHelper; // <--- The trait
