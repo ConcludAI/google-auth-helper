@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use google_cloud_storage::client::{google_cloud_auth::credentials::CredentialsFile, ClientConfig};
 use hyper::client::HttpConnector;
 use hyper_rustls::HttpsConnector;
-use std::error::Error;
 use std::fs::read_to_string;
 use std::path::PathBuf;
 use yup_oauth2::authenticator::{ApplicationDefaultCredentialsTypes, Authenticator};
@@ -11,8 +10,26 @@ use yup_oauth2::{
     ApplicationDefaultCredentialsFlowOpts, AuthorizedUserAuthenticator,
     ServiceAccountAuthenticator, ServiceAccountKey,
 };
+use thiserror::Error;
 
 const DEFAULT_CREDENTIALS_FILE: &str = "application_default_credentials.json";
+
+#[derive(Error, Debug)]
+pub enum AuthError {
+    #[error("failed to read credentials file: {0}")]
+    ReadFile(#[from] std::io::Error),
+    #[error("failed to parse credentials file: {0}")]
+    ParseFile(#[from] serde_json::Error),
+    #[error("failed to read credentials from env: {0}")]
+    Env(#[from] std::env::VarError),
+    #[error("failed to build Authenticator from yup_oauth2: {0}")]
+    YupAuth(#[from] yup_oauth2::error::Error),
+    #[error("failed to build ClientConfig from google_cloud_storage: {0}")]
+    StorageAuth(#[from] google_cloud_storage::client::google_cloud_auth::error::Error),
+}
+
+
+
 
 /// [`helper::AuthHelper`] trait for authenticating with google cloud services across different libraries
 /// This trait is implemented for `ClientConfig` and `Authenticator<HttpsConnector<HttpConnector>>`
@@ -26,29 +43,29 @@ pub trait AuthHelper: Sized {
     /// and `%APPDATA%/gcloud/application_default_credentials.json` on windows
     /// run `gcloud auth application-default login` to create this file
     /// 3. Check for creds on metadata server
-    async fn auth() -> Result<Self, Box<dyn Error + Send + Sync>>;
+    async fn auth() -> Result<Self, AuthError>;
 
     /// Authenticate with google cloud services using a credentials file (service account file)
-    async fn auth_with_file(file: String) -> Result<Self, Box<dyn Error + Send + Sync>>;
+    async fn auth_with_file(file: String) -> Result<Self, AuthError>;
 
     /// Authenticate with google cloud services using env variables of the service account credentials
-    async fn auth_with_env(env: String) -> Result<Self, Box<dyn Error + Send + Sync>>;
+    async fn auth_with_env(env: String) -> Result<Self, AuthError>;
 }
 
 #[async_trait]
 impl AuthHelper for ClientConfig {
-    async fn auth() -> Result<Self, Box<dyn Error + Send + Sync>> {
+    async fn auth() -> Result<Self, AuthError> {
         let auth = ClientConfig::default().with_auth().await?;
         Ok(auth)
     }
 
-    async fn auth_with_file(file: String) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    async fn auth_with_file(file: String) -> Result<Self, AuthError> {
         let file = CredentialsFile::new_from_file(file).await?;
         let auth = ClientConfig::default().with_credentials(file).await?;
         Ok(auth)
     }
 
-    async fn auth_with_env(env: String) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    async fn auth_with_env(env: String) -> Result<Self, AuthError> {
         let string = std::env::var(env)?;
         let file = CredentialsFile::new_from_str(string.as_str()).await?;
         let auth = ClientConfig::default().with_credentials(file).await?;
@@ -58,7 +75,7 @@ impl AuthHelper for ClientConfig {
 
 #[async_trait]
 impl AuthHelper for Authenticator<HttpsConnector<HttpConnector>> {
-    async fn auth() -> Result<Self, Box<dyn Error + Send + Sync>> {
+    async fn auth() -> Result<Self, AuthError> {
         // from GOOGLE_APPLICATION_CREDENTIALS_JSON env variable
         let env = "GOOGLE_APPLICATION_CREDENTIALS_JSON".to_string();
         let string = std::env::var(env);
@@ -129,13 +146,13 @@ impl AuthHelper for Authenticator<HttpsConnector<HttpConnector>> {
         Ok(auth)
     }
 
-    async fn auth_with_file(file: String) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    async fn auth_with_file(file: String) -> Result<Self, AuthError> {
         let secret = serde_json::from_str::<ServiceAccountKey>(&read_to_string(file)?)?;
         let auth = ServiceAccountAuthenticator::builder(secret).build().await?;
         Ok(auth)
     }
 
-    async fn auth_with_env(env: String) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    async fn auth_with_env(env: String) -> Result<Self, AuthError> {
         let string = std::env::var(env)?;
         let secret = serde_json::from_str::<ServiceAccountKey>(&string)?;
         let auth = ServiceAccountAuthenticator::builder(secret).build().await?;

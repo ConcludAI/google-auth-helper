@@ -33,3 +33,5 @@
 //! }
 //! ```
 pub mod helper;
+pub use helper::AuthHelper;
+pub use helper::AuthError;
