@@ -6,16 +6,16 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-google-cloud-storage = "0.15"
+google-cloud-storage = "0"
 yup-oauth2 = "8"
 tokio = {version = "1", default-features = false, features = ["rt-multi-thread", "macros"]}
 serde = "1"
 serde_json = { version = "1", features = [] }
-async-trait = "0.1.74"
-hyper = "0.14"
-hyper-rustls = "0.24"
-home = "0.5"
-thiserror = "1.0"
+async-trait = "0"
+hyper = "0"
+hyper-rustls = "0"
+home = "0"
+thiserror = "1"
 
 # test dependencies
 [dev-dependencies]
