@@ -1,7 +1,5 @@
 use async_trait::async_trait;
 use google_cloud_storage::client::{google_cloud_auth::credentials::CredentialsFile, ClientConfig};
-use hyper::client::HttpConnector;
-use hyper_rustls::HttpsConnector;
 use std::fs::read_to_string;
 use std::path::PathBuf;
 use yup_oauth2::authenticator::{ApplicationDefaultCredentialsTypes, Authenticator};
@@ -10,6 +8,7 @@ use yup_oauth2::{
     ApplicationDefaultCredentialsFlowOpts, AuthorizedUserAuthenticator,
     ServiceAccountAuthenticator, ServiceAccountKey,
 };
+use yup_oauth2::{hyper::client::HttpConnector, hyper_rustls::HttpsConnector};
 use thiserror::Error;
 
 const DEFAULT_CREDENTIALS_FILE: &str = "application_default_credentials.json";
